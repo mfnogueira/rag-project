@@ -105,6 +105,25 @@ def main(collection: str = "sumulas_tcemg", pasta_pdfs: str = "sumulas"):
             },
         )
         print(f"Coleção '{collection}' criada.")
+
+        # Criar índices para os campos usados em filtros
+        print("Criando índices para filtros...")
+        embedder.client.create_payload_index(
+            collection_name=collection,
+            field_name="num_sumula",
+            field_schema="keyword"
+        )
+        embedder.client.create_payload_index(
+            collection_name=collection,
+            field_name="status_atual",
+            field_schema="keyword"
+        )
+        embedder.client.create_payload_index(
+            collection_name=collection,
+            field_name="data_status_ano",
+            field_schema="integer"
+        )
+        print("✅ Índices criados com sucesso!")
     else:
         print(f"Coleção '{collection}' já existe.")
 
