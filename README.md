@@ -11,6 +11,7 @@ Este projeto implementa um assistente conversacional baseado em IA que permite r
 - 🔍 **Busca Semântica Híbrida**: Vetores densos e esparsos para máxima precisão
 - 🤖 **Self-Query Retriever**: Extração automática de filtros a partir da pergunta
 - 💬 **Interface Conversacional**: Chat interativo via Streamlit
+- 🛡️ **Guardrails AI**: Validação de inputs e outputs para segurança e qualidade
 - 📊 **Observabilidade Completa**: Rastreamento detalhado com Langfuse
 - ☁️ **Cloud-Ready**: Suporte a Qdrant Cloud e local
 - 📚 **Processamento Automático**: Extração de metadados e chunks dos PDFs
@@ -24,6 +25,7 @@ Este projeto implementa um assistente conversacional baseado em IA que permite r
 | **Vector Store** | Qdrant Cloud | Armazenamento e busca vetorial |
 | **Orquestração** | LangGraph | Controle de fluxo e estado |
 | **Framework** | LangChain | Integração LLM + Vector Store |
+| **Guardrails** | Guardrails AI | Validação e segurança de I/O |
 | **Observabilidade** | Langfuse | Monitoramento e traces |
 | **Interface** | Streamlit | Frontend interativo |
 | **Extração PDF** | MarkItDown | Processamento de documentos |
@@ -68,12 +70,14 @@ Este projeto implementa um assistente conversacional baseado em IA que permite r
 ### Fluxo de Dados
 
 1. **Input**: Usuário faz pergunta em linguagem natural
-2. **Self-Query**: LLM analisa a pergunta e extrai:
+2. **Validation (Input)**: Guardrails valida e filtra conteúdo inadequado
+3. **Self-Query**: LLM analisa a pergunta e extrai:
    - Termos semânticos para busca
    - Filtros de metadados (status, ano, número da súmula)
-3. **Retrieval**: Busca híbrida no Qdrant retorna chunks relevantes
-4. **Generation**: GPT-4o-mini gera resposta contextualizada
-5. **Output**: Resposta + fontes são exibidas no chat
+4. **Retrieval**: Busca híbrida no Qdrant retorna chunks relevantes
+5. **Generation**: GPT-4o-mini gera resposta contextualizada
+6. **Validation (Output)**: Guardrails valida qualidade e segurança da resposta
+7. **Output**: Resposta validada + fontes são exibidas no chat
 
 ---
 
@@ -85,14 +89,22 @@ rag-project/
 │   ├── graph/
 │   │   ├── rag_graph.py          # Orquestração LangGraph
 │   │   └── prompt.py             # Templates de prompts
+│   ├── guardrails/
+│   │   ├── __init__.py           # Módulo Guardrails
+│   │   └── guards.py             # Validators e Guards
 │   ├── ingest/
 │   │   ├── embed_qdrant.py       # Cliente Qdrant + Embeddings
 │   │   └── extract_text.py       # Pipeline de ingestão
 │   ├── retrieval/
-│   │   ├── retriever.py          # Self-Query Retriever
+│   │   ├── retriever.py          # Self-Query Retriever (robusto)
 │   │   └── self_query.py         # Definição de metadados
 │   └── utils/
 │       └── settings.py           # Configurações
+├── tests/
+│   ├── test_guardrails.py        # Testes Guardrails
+│   ├── test_query_complete.py    # Teste fluxo RAG completo
+│   ├── fix_qdrant_indexes.py     # Utilitário de manutenção
+│   └── README.md                 # Documentação de testes
 ├── sumulas/                      # PDFs das súmulas (125 arquivos)
 ├── app.py                        # Interface Streamlit
 ├── pyproject.toml                # Dependências (uv)
@@ -232,6 +244,45 @@ Acesse: **http://localhost:8501**
 
 ---
 
+## 🛡️ Guardrails AI
+
+O projeto implementa validações automáticas de segurança e qualidade usando Guardrails AI.
+
+### Validações Ativas
+
+**Input (Perguntas do Usuário):**
+- ✅ Bloqueio de palavrões e linguagem ofensiva
+- ✅ Rejeição de conteúdo inadequado
+
+**Output (Respostas do LLM):**
+- ✅ Remoção automática de linguagem tóxica
+- ✅ Validação de tamanho (100-2000 caracteres)
+- ✅ Garantia de qualidade e consistência
+
+### Testar Guardrails
+
+```bash
+# Executar testes de validação
+uv run python test_guardrails.py
+```
+
+### Exemplo de Uso
+
+```python
+from app.guardrails.guards import validate_input, validate_output
+
+# Validar pergunta do usuário
+result = validate_input("Pergunta do usuário")
+if not result['is_valid']:
+    print(f"Erro: {result['errors']}")
+
+# Validar resposta do LLM
+result = validate_output("Resposta gerada")
+clean_text = result['cleaned_text']
+```
+
+---
+
 ## 🔧 Configurações Avançadas
 
 ### Ajustar Número de Documentos Recuperados
@@ -289,6 +340,20 @@ Cada execução registra:
 - `collection`: Nome da coleção Qdrant
 - `k`: Número de documentos recuperados
 - `tags`: `["rag-tcemg", "sumulas"]`
+- `guardrails_status`: Validações aplicadas
+
+### Logs de Guardrails
+
+Durante a execução, o console mostra:
+```
+🛡️  Guardrails ativado - validando resposta...
+✅ Resposta aprovada pelo Guardrails
+```
+
+Ou, se houver ajustes:
+```
+⚠️  Resposta ajustada pelo Guardrails: [detalhes]
+```
 
 ---
 
@@ -352,6 +417,34 @@ Cada súmula é dividida em até 3 chunks:
 
 - [RAG: Retrieval-Augmented Generation](https://arxiv.org/abs/2005.11401)
 - [Self-Query Retrieval](https://blog.langchain.dev/query-construction/)
+
+---
+
+## 🎯 Funcionalidades Implementadas
+
+### ✅ Core RAG
+- [x] Ingestão automática de PDFs
+- [x] Embeddings com text-embedding-3-large
+- [x] Self-Query Retriever
+- [x] Busca híbrida (densa + esparsa)
+- [x] Geração com GPT-4o-mini
+- [x] Streaming de respostas
+
+### ✅ Qualidade e Segurança
+- [x] Guardrails AI (Fase 1)
+  - [x] Validação de inputs
+  - [x] Validação de outputs
+  - [x] Remoção de linguagem tóxica
+  - [x] Controle de tamanho
+- [ ] Guardrails AI (Fase 2)
+  - [ ] Validação de súmulas citadas
+  - [ ] Detecção de alucinações
+  - [ ] Garantia de tom jurídico
+
+### ✅ Observabilidade
+- [x] Integração Langfuse
+- [x] Logs detalhados
+- [x] Métricas de validação
 
 ---
 
