@@ -69,10 +69,19 @@ def retrieve(
     cfg = SelfQueryConfig(collection_name=collection_name, k=k)
     retriever = build_self_query_retriever(cfg)
 
-    structured_query: StructuredQuery = retriever.query_constructor.invoke(
-        {"query": state["question"]}, config=config
-    )
-    docs = retriever.invoke(state["question"], config=config)
+    try:
+        structured_query: StructuredQuery = retriever.query_constructor.invoke(
+            {"query": state["question"]}, config=config
+        )
+        docs = retriever.invoke(state["question"], config=config)
+    except Exception as e:
+        # Se falhar, tenta busca simples sem filtros
+        print(f"⚠️ Erro no self-query: {e}")
+        print("Executando busca simples sem filtros...")
+        embedder = EmbeddingSelfQuery()
+        vectorstore = embedder.get_qdrant_vector_store(collection_name)
+        docs = vectorstore.similarity_search(state["question"], k=k)
+        structured_query = StructuredQuery(query=state["question"], filter=None)
 
     print(f"Busca finalizada. Encontrados {len(docs)} documentos.")
     return {
@@ -83,8 +92,10 @@ def retrieve(
 
 
 def generate_stream(state: RAGState, config: RunnableConfig) -> Dict[str, Any]:
-    """Nó que gera a resposta final em formato de stream."""
+    """Nó que gera a resposta final em formato de stream com validação Guardrails."""
     print("Executando o nó de geração...")
+    from app.guardrails.guards import validate_output
+
     QA_PROMPT = ChatPromptTemplate.from_messages(
         [
             ("system", SYSTEM_PROMPT_JURIDICO),
@@ -100,11 +111,35 @@ def generate_stream(state: RAGState, config: RunnableConfig) -> Dict[str, Any]:
     context = _format_docs(state.get("docs", []))
     chain = QA_PROMPT | llm | StrOutputParser()
 
-    answer_stream = chain.stream(
+    # Acumular resposta completa para validação
+    print("🛡️  Guardrails ativado - validando resposta...")
+    full_answer = ""
+    for chunk in chain.stream(
         {"question": state["question"], "context": context},
         config=config,
+    ):
+        full_answer += chunk
+
+    # Validar resposta completa com detecção de alucinações
+    docs = state.get("docs", [])
+    validation_result = validate_output(
+        full_answer,
+        context_docs=docs,
+        enable_hallucination_detection=True
     )
-    return {"answer": answer_stream}
+    validated_answer = validation_result["cleaned_text"]
+
+    if not validation_result["is_valid"]:
+        print(f"⚠️  Resposta ajustada pelo Guardrails: {validation_result['validation_info']}")
+    else:
+        print("✅ Resposta aprovada pelo Guardrails")
+
+    # Retornar como generator para manter compatibilidade
+    def answer_generator():
+        for char in validated_answer:
+            yield char
+
+    return {"answer": answer_generator()}
 
 
 # --- Construção do Grafo ---
@@ -131,8 +166,23 @@ COMPILED_GRAPH = build_streaming_graph()
 # --- Função Principal (Ponto de Entrada para o Frontend) ---
 def run_streaming_rag(question: str) -> Generator[Dict[str, Any], None, None]:
     """
-    Função de alto nível que executa o fluxo RAG e retorna um gerador de eventos para o frontend.
+    Função de alto nível que executa o fluxo RAG com validação Guardrails.
     """
+    from app.guardrails.guards import validate_input
+
+    # Validar input do usuário
+    input_validation = validate_input(question)
+
+    if not input_validation["is_valid"]:
+        # Retorna erro se input contém conteúdo inadequado
+        yield {
+            "type": "error",
+            "data": {
+                "message": "Pergunta contém conteúdo inadequado",
+                "errors": input_validation["errors"]
+            }
+        }
+        return
 
     # run_config = {"callbacks": [langfuse_handler], "run_name": "Chat"}
     run_config = RunnableConfig(
